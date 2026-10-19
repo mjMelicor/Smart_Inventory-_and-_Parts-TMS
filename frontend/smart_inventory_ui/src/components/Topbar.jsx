@@ -1,0 +1,1 @@
+export default function Topbar({role,onLogout}){return <header className="topbar"><div><span className="mobileBrand">SIPT</span><h2>{role} Portal</h2></div><div className="topActions"><button className="notify">🔔<span>3</span></button><div className="avatar">A</div><button className="textBtn" onClick={onLogout}>Logout</button></div></header>}

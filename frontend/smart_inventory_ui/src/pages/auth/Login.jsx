@@ -1,0 +1,5 @@
+import { useState } from 'react';
+export default function Login({ onLogin, onSignUp }) {
+  const [role, setRole] = useState('Technician');
+  return <div className="auth"><div className="authCard"><div className="authLogo">S</div><h1>Smart Inventory</h1><p className="muted">Multi-Branch Automotive Parts Transfer Management</p><form onSubmit={e => { e.preventDefault(); onLogin(role); }}><label>Username / Email<input autoComplete="username" defaultValue="alex@shop.com" required /></label><label>Password<input type="password" autoComplete="current-password" defaultValue="password" required /></label><label>Demo Role<select value={role} onChange={e => setRole(e.target.value)}><option>Technician</option><option>Branch Manager</option><option>Head Office Admin</option></select></label><button className="primary wide" type="submit">Sign In</button></form><button className="linkBtn wide" onClick={onSignUp}>Create a new account</button><div className="authHint">Prototype mode: authentication is simulated. Backend authentication will be connected later.</div></div></div>;
+}

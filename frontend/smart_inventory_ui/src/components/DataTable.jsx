@@ -1,0 +1,1 @@
+export default function DataTable({columns,rows}){return <div className="tableWrap"><table><thead><tr>{columns.map(c=><th key={c}>{c}</th>)}</tr></thead><tbody>{rows.length?rows.map((r,i)=><tr key={r.id||i}>{columns.map(c=><td key={c}>{r[c]??'—'}</td>)}</tr>):<tr><td colSpan={columns.length} className="empty">No records found.</td></tr>}</tbody></table></div>}

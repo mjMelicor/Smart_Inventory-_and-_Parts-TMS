@@ -1,2 +1,38 @@
-import { useState } from 'react';import {useInventory} from '../../data/InventoryContext';import {branches} from '../../data/mockData';
-export default function LowStockSettings(){const {parts,account}=useInventory();const branchId=account?.branch||'B001';const branchName=branches.find(branch=>branch.id===branchId)?.name||'Main Branch';const [thresholds,setThresholds]=useState(()=>Object.fromEntries(parts.map(part=>[part.id,String(part.min)])));const [validated,setValidated]=useState(false);const save=event=>{event.preventDefault();if(event.currentTarget.reportValidity())setValidated(true);};return <><div className="pageHead"><div><h1>Low Stock & Settings</h1><p>Set {branchName} minimum stock thresholds and warning preferences.</p></div><button className="primary" form="low-stock-settings" type="submit">Save Changes</button></div>{validated&&<p className="notice" role="status">Validation passed. Settings are not persisted by this prototype.</p>}<form id="low-stock-settings" onSubmit={save}><div className="card"><div className="tableWrap"><table><thead><tr><th>Part</th><th>Current Stock</th><th>Minimum Threshold</th><th>Warning</th><th>Auto Alert</th></tr></thead><tbody>{parts.map(part=>{const stock=Number(part.stock[branchId]||0);const threshold=Number(thresholds[part.id]);return <tr key={part.id}><td><b>{part.name}</b><small>{part.sku}</small></td><td>{stock}</td><td><input className="smallInput" type="number" min="0" max="99999" step="1" value={thresholds[part.id]} onChange={event=>{setValidated(false);setThresholds(values=>({...values,[part.id]:event.target.value}));}} required aria-label={`${part.name} minimum threshold`}/></td><td>{stock<threshold?'Immediate':'When threshold reached'}</td><td><input type="checkbox" defaultChecked aria-label={`${part.name} auto alert`}/></td></tr>})}</tbody></table></div></div></form></>}
+import { useEffect, useState } from 'react';
+import { useInventory } from '../../data/InventoryContext';
+
+export default function LowStockSettings() {
+  const { parts, account, branches, availableStock, saveReorderLevels } = useInventory();
+  const branchId = account.branch;
+  const branchName = branches.find(branch => branch.id === branchId)?.name || account.branchName;
+  const [thresholds, setThresholds] = useState({});
+  const [message, setMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setThresholds(Object.fromEntries(parts.map(part => [part.id, String(part.reorderLevels[branchId] || 0)])));
+  }, [parts, branchId]);
+
+  const save = async event => {
+    event.preventDefault();
+    setSaving(true);
+    setMessage('');
+    const result = await saveReorderLevels(branchId, thresholds);
+    if (!result.ok) {
+      setMessage(result.message);
+      setSaving(false);
+      return;
+    }
+    setMessage('Low-stock thresholds saved.');
+    setSaving(false);
+  };
+
+  return <><div className="pageHead"><div><h1>Low Stock & Settings</h1><p>Set {branchName} minimum stock thresholds.</p></div><button className="primary" form="low-stock-settings" type="submit" disabled={saving}>{saving ? 'Saving…' : 'Save Changes'}</button></div>
+    {message && <p className="notice" role="status">{message}</p>}
+    <form id="low-stock-settings" onSubmit={save}><div className="card"><div className="tableWrap"><table><thead><tr><th>Part</th><th>Available Stock</th><th>Minimum Threshold</th><th>Warning</th></tr></thead><tbody>{parts.map(part => {
+      const available = availableStock(part.id, branchId);
+      const threshold = Number(thresholds[part.id] || 0);
+      return <tr key={part.id}><td><b>{part.name}</b><small>{part.sku}</small></td><td>{available}</td><td><input className="smallInput" type="number" min="0" max="1000000" step="1" value={thresholds[part.id] ?? '0'} onChange={event => setThresholds(values => ({ ...values, [part.id]: event.target.value }))} required aria-label={`${part.name} minimum threshold`} /></td><td>{threshold > 0 && available <= threshold ? 'Low stock' : 'Healthy'}</td></tr>;
+    })}</tbody></table></div></div></form>
+  </>;
+}

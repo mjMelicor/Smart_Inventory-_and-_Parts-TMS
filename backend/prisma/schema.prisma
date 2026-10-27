@@ -1,0 +1,226 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Branch {
+  id                   BigInt            @id @default(autoincrement()) @map("branch_id")
+  code                 String            @unique @map("branch_code") @db.VarChar(10)
+  name                 String            @map("branch_name") @db.VarChar(100)
+  address              String
+  phone                String?           @db.VarChar(20)
+  isActive             Boolean           @default(true) @map("is_active")
+  createdAt            DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  auditLogs            AuditLog[]
+  inventory            Inventory[]
+  setup_codes          SetupCode[]
+  destinationTransfers TransferRequest[] @relation("DestinationBranch")
+  sourceTransfers      TransferRequest[] @relation("SourceBranch")
+  users                User[]
+  workOrders           WorkOrder[]
+
+  @@map("branches")
+}
+
+model User {
+  id                 BigInt            @id @default(autoincrement()) @map("user_id")
+  branchId           BigInt?           @map("branch_id")
+  firstName          String            @map("first_name") @db.VarChar(75)
+  lastName           String            @map("last_name") @db.VarChar(75)
+  email              String            @unique @db.VarChar(255)
+  passwordHash       String            @map("password_hash")
+  role               String            @db.VarChar(30)
+  isActive           Boolean           @default(true) @map("is_active")
+  createdAt          DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  auditLogs          AuditLog[]
+  setup_codes        SetupCode[]
+  approvedTransfers  TransferRequest[] @relation("ApprovedBy")
+  requestedTransfers TransferRequest[] @relation("RequestedBy")
+  receiptEvents      TransferReceiptEvent[]
+  branch             Branch?           @relation(fields: [branchId], references: [id], onUpdate: NoAction, map: "fk_users_branch")
+  assignedWorkOrders WorkOrder[]       @relation("AssignedTechnician")
+
+  @@index([branchId], map: "idx_users_branch_id")
+  @@map("users")
+}
+
+model Supplier {
+  id            BigInt   @id @default(autoincrement()) @map("supplier_id")
+  companyName   String   @map("company_name") @db.VarChar(150)
+  contactPerson String?  @map("contact_person") @db.VarChar(150)
+  email         String?  @db.VarChar(255)
+  phone         String?  @db.VarChar(20)
+  address       String?
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  parts         Part[]
+
+  @@map("suppliers")
+}
+
+model Part {
+  id             BigInt          @id @default(autoincrement()) @map("part_id")
+  supplierId     BigInt          @map("supplier_id")
+  partNumber     String          @unique(map: "uq_parts_part_number") @map("part_number") @db.VarChar(100)
+  name           String          @map("part_name") @db.VarChar(150)
+  description    String?
+  category       String?         @db.VarChar(100)
+  unitOfMeasure  String          @map("unit_of_measure") @db.VarChar(50)
+  wholesaleCost  Decimal         @map("wholesale_cost") @db.Decimal(12, 2)
+  retailPrice    Decimal         @map("retail_price") @db.Decimal(12, 2)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  inventory      Inventory[]
+  supplier       Supplier        @relation(fields: [supplierId], references: [id], onUpdate: NoAction, map: "fk_parts_supplier")
+  transferItems  TransferItem[]
+  workOrderItems WorkOrderItem[]
+
+  @@index([supplierId], map: "idx_parts_master_supplier_id")
+  @@map("parts_master")
+}
+
+model WorkOrder {
+  id                   BigInt          @id @default(autoincrement()) @map("work_order_id")
+  number               String          @unique @map("work_order_number") @db.VarChar(50)
+  branchId             BigInt          @map("branch_id")
+  assignedTechnicianId BigInt?         @map("assigned_technician_id")
+  customerName         String          @map("customer_name") @db.VarChar(150)
+  customerPhone        String?         @map("customer_phone") @db.VarChar(20)
+  vehicleVinOrPlate    String          @map("vehicle_vin_or_plate") @db.VarChar(50)
+  vehicleModel         String?         @map("vehicle_model") @db.VarChar(150)
+  status               String          @default("open") @db.VarChar(30)
+  laborFee             Decimal         @default(0.00) @map("labor_fee") @db.Decimal(12, 2)
+  totalAmount          Decimal         @default(0.00) @map("total_amount") @db.Decimal(12, 2)
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  completedAt          DateTime?       @map("completed_at") @db.Timestamptz(6)
+  items                WorkOrderItem[]
+  branch               Branch          @relation(fields: [branchId], references: [id], onUpdate: NoAction, map: "fk_work_orders_branch")
+  assignedTechnician   User?           @relation("AssignedTechnician", fields: [assignedTechnicianId], references: [id], onUpdate: NoAction, map: "fk_work_orders_technician")
+
+  @@index([branchId], map: "idx_work_orders_branch_id")
+  @@index([assignedTechnicianId], map: "idx_work_orders_technician_id")
+  @@map("work_orders")
+}
+
+model WorkOrderItem {
+  id               BigInt    @id @default(autoincrement()) @map("item_id")
+  workOrderId      BigInt    @map("work_order_id")
+  partId           BigInt    @map("part_id")
+  quantityUsed     Int       @map("quantity_used")
+  unitPriceCharged Decimal   @map("unit_price_charged") @db.Decimal(12, 2)
+  subtotal         Decimal   @db.Decimal(12, 2)
+  addedAt          DateTime  @default(now()) @map("added_at") @db.Timestamptz(6)
+  part             Part      @relation(fields: [partId], references: [id], onUpdate: NoAction, map: "fk_work_order_items_part")
+  workOrder        WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_work_order_items_work_order")
+
+  @@index([workOrderId], map: "idx_work_order_items_work_order_id")
+  @@index([partId], map: "idx_work_order_items_part_id")
+  @@map("work_order_items")
+}
+
+model TransferRequest {
+  id                  BigInt         @id @default(autoincrement()) @map("transfer_id")
+  code                String         @unique @map("transfer_code") @db.VarChar(50)
+  sourceBranchId      BigInt         @map("source_branch_id")
+  destinationBranchId BigInt         @map("destination_branch_id")
+  requestedByUserId   BigInt         @map("requested_by_user_id")
+  approvedByUserId    BigInt?        @map("approved_by_user_id")
+  status              String         @default("pending") @db.VarChar(30)
+  requestNotes        String?        @map("request_notes")
+  createdAt           DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+  items               TransferItem[]
+  approvedBy          User?          @relation("ApprovedBy", fields: [approvedByUserId], references: [id], onUpdate: NoAction, map: "fk_transfer_requests_approved_by")
+  destinationBranch   Branch         @relation("DestinationBranch", fields: [destinationBranchId], references: [id], onUpdate: NoAction, map: "fk_transfer_requests_destination_branch")
+  requestedBy         User           @relation("RequestedBy", fields: [requestedByUserId], references: [id], onUpdate: NoAction, map: "fk_transfer_requests_requested_by")
+  sourceBranch        Branch         @relation("SourceBranch", fields: [sourceBranchId], references: [id], onUpdate: NoAction, map: "fk_transfer_requests_source_branch")
+
+  @@index([sourceBranchId], map: "idx_transfer_requests_source_branch")
+  @@index([destinationBranchId], map: "idx_transfer_requests_destination_branch")
+  @@index([requestedByUserId], map: "idx_transfer_requests_requested_by")
+  @@index([approvedByUserId], map: "idx_transfer_requests_approved_by")
+  @@map("transfer_requests")
+}
+
+model TransferItem {
+  id                BigInt          @id @default(autoincrement()) @map("transfer_item_id")
+  transferId        BigInt          @map("transfer_id")
+  partId            BigInt          @map("part_id")
+  quantityRequested Int             @map("quantity_requested")
+  quantityApproved  Int             @default(0) @map("quantity_approved")
+  quantityReceived  Int             @default(0) @map("quantity_received")
+  addedAt           DateTime        @default(now()) @map("added_at") @db.Timestamptz(6)
+  part              Part            @relation(fields: [partId], references: [id], onUpdate: NoAction, map: "fk_transfer_items_part")
+  transfer          TransferRequest @relation(fields: [transferId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fk_transfer_items_transfer")
+  receiptEvents     TransferReceiptEvent[]
+
+  @@index([transferId], map: "idx_transfer_items_transfer_id")
+  @@index([partId], map: "idx_transfer_items_part_id")
+  @@map("transfer_items")
+}
+
+model TransferReceiptEvent {
+  idempotencyKey   String       @id @map("idempotency_key") @db.Uuid
+  transferItemId   BigInt       @map("transfer_item_id")
+  quantity         Int
+  receivedByUserId BigInt       @map("received_by_user_id")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  transferItem     TransferItem @relation(fields: [transferItemId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_transfer_receipt_events_item")
+  receivedBy       User         @relation(fields: [receivedByUserId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "fk_transfer_receipt_events_user")
+
+  @@index([transferItemId], map: "idx_transfer_receipt_events_item")
+  @@index([receivedByUserId], map: "idx_transfer_receipt_events_user")
+  @@map("transfer_receipt_events")
+}
+
+model Inventory {
+  id               BigInt   @id @default(autoincrement()) @map("inventory_id")
+  branchId         BigInt   @map("branch_id")
+  partId           BigInt   @map("part_id")
+  quantityOnHand   Int      @default(0) @map("quantity_on_hand")
+  quantityReserved Int      @default(0) @map("quantity_reserved")
+  reorderLevel     Int      @default(0) @map("reorder_level")
+  shelfBinLocation String?  @map("shelf_bin_location") @db.VarChar(100)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  branch           Branch   @relation(fields: [branchId], references: [id], onUpdate: NoAction, map: "fk_inventory_branch")
+  part             Part     @relation(fields: [partId], references: [id], onUpdate: NoAction, map: "fk_inventory_part")
+
+  @@unique([branchId, partId], map: "uq_inventory_branch_part")
+  @@index([branchId], map: "idx_inventory_branch_id")
+  @@index([partId], map: "idx_inventory_part_id")
+  @@map("inventory")
+}
+
+model AuditLog {
+  id                BigInt   @id @default(autoincrement()) @map("log_id")
+  tableName         String   @map("table_name") @db.VarChar(100)
+  operation         String   @db.VarChar(30)
+  recordId          BigInt   @map("record_id")
+  branchId          BigInt?  @map("branch_id")
+  performedByUserId BigInt?  @map("performed_by_user_id")
+  oldData           Json?    @map("old_data")
+  timestamp         DateTime @default(now()) @db.Timestamptz(6)
+  branch            Branch?  @relation(fields: [branchId], references: [id], onUpdate: NoAction, map: "fk_audit_logs_branch")
+  performedBy       User?    @relation(fields: [performedByUserId], references: [id], onUpdate: NoAction, map: "fk_audit_logs_user")
+
+  @@index([branchId], map: "idx_audit_logs_branch_id")
+  @@index([performedByUserId], map: "idx_audit_logs_user_id")
+  @@map("audit_logs")
+}
+
+model SetupCode {
+  id        BigInt    @id @default(autoincrement()) @map("setup_code_id")
+  codeHash  String    @unique @map("code_hash")
+  role      String    @db.VarChar(30)
+  branchId  BigInt?   @map("branch_id")
+  createdBy BigInt    @map("created_by_user_id")
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(6)
+  usedAt    DateTime? @map("used_at") @db.Timestamptz(6)
+  branches  Branch?   @relation(fields: [branchId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  users     User      @relation(fields: [createdBy], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([expiresAt], map: "idx_setup_codes_expires_at")
+  @@map("setup_codes")
+}

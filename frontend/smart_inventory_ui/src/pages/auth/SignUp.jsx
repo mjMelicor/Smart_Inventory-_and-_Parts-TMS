@@ -1,32 +1,51 @@
-import { useState } from 'react';
-export default function SignUp({ onBack, onCreated }) {
+import { useEffect, useState } from 'react';
+import { api } from '../../data/api';
+
+const roleValues = { Technician: 'technician', 'Branch Manager': 'branch_manager', 'Head Office Admin': 'head_office_admin' };
+
+export default function SignUp({ onBack, onCreated, error: serverError }) {
   const [role, setRole] = useState('Technician');
-  const [name, setName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [branch, setBranch] = useState('');
+  const [branchId, setBranchId] = useState('');
   const [setupCode, setSetupCode] = useState('');
+  const [branches, setBranches] = useState([]);
   const [error, setError] = useState('');
-  const submit = e => {
-    e.preventDefault();
-    if (!e.currentTarget.reportValidity()) return;
-    if (name.trim().length < 2) return setError('Enter a name with at least 2 characters.');
-    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,128}/.test(password)) return setError('Use 8–128 characters with uppercase, lowercase, and a number.');
-    if (password !== confirmPassword) return setError('Passwords do not match.');
-    if (role !== 'Technician' && !setupCode.trim()) return setError('Enter the setup credential provided by Head Office.');
-    onCreated({ id: `USR-${Date.now()}`, name: name.trim(), email: email.trim().toLowerCase(), role, branch: role === 'Head Office Admin' ? 'Head Office' : branch });
+
+  useEffect(() => {
+    api('/branches').then(setBranches).catch(requestError => setError(requestError.message));
+  }, []);
+
+  const submit = event => {
+    event.preventDefault();
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    onCreated({
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      email: email.trim().toLowerCase(),
+      password,
+      role: roleValues[role],
+      ...(role !== 'Head Office Admin' ? { branchId } : {}),
+      ...(role !== 'Technician' ? { setupCode: setupCode.trim() } : {})
+    });
   };
-  return <div className="auth"><div className="authCard"><div className="authLogo">S</div><h1>Create Account</h1><p className="muted">Role-specific registration prototype.</p><form onSubmit={submit}>
-    <label>Full Name<input value={name} onChange={e => { setName(e.target.value); setError(''); }} placeholder="Juan Dela Cruz" autoComplete="name" required minLength="2" /></label>
-    <label>Email<input value={email} onChange={e => { setEmail(e.target.value); setError(''); }} type="email" placeholder="juan@example.com" autoComplete="email" required /></label>
-    <label>Password<input type="password" value={password} onChange={e => { setPassword(e.target.value); setError(''); }} placeholder="8+ characters with upper, lower, and number" autoComplete="new-password" required minLength="8" maxLength="128" /></label>
-    <label>Confirm Password<input type="password" value={confirmPassword} onChange={e => { setConfirmPassword(e.target.value); setError(''); }} autoComplete="new-password" required minLength="8" maxLength="128" /></label>
-    <label>Account Type<select value={role} onChange={e => { setRole(e.target.value); setBranch(''); setSetupCode(''); setError(''); }}><option>Technician</option><option>Branch Manager</option><option>Head Office Admin</option></select></label>
-    {role !== 'Head Office Admin' && <label>{role === 'Technician' ? 'Home Branch' : 'Assigned Branch'}<select value={branch} onChange={e => { setBranch(e.target.value); setError(''); }} required><option value="">Select a branch</option><option value="B001">Main Branch</option><option value="B002">North Branch</option><option value="B003">South Branch</option></select></label>}
-    {role === 'Branch Manager' && <label>Manager Setup Link<input value={setupCode} onChange={e => { setSetupCode(e.target.value); setError(''); }} placeholder="Provided by Head Office" required /></label>}
-    {role === 'Head Office Admin' && <label>Administrative Setup Code<input value={setupCode} onChange={e => { setSetupCode(e.target.value); setError(''); }} placeholder="Initial setup / expansion code" required /></label>}
+
+  return <div className="auth"><div className="authCard"><div className="authLogo">S</div><h1>Create Account</h1><p className="muted">Create an account for the Smart Inventory system.</p><form onSubmit={submit}>
+    <label>First Name<input value={firstName} onChange={event => setFirstName(event.target.value)} autoComplete="given-name" required maxLength="75" /></label>
+    <label>Last Name<input value={lastName} onChange={event => setLastName(event.target.value)} autoComplete="family-name" required maxLength="75" /></label>
+    <label>Email<input value={email} onChange={event => setEmail(event.target.value)} type="email" autoComplete="email" required maxLength="255" /></label>
+    <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete="new-password" required minLength="8" maxLength="128" /></label>
+    <label>Confirm Password<input type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" required /></label>
+    <label>Account Type<select value={role} onChange={event => { setRole(event.target.value); setBranchId(''); setSetupCode(''); setError(''); }}><option>Technician</option><option>Branch Manager</option><option>Head Office Admin</option></select></label>
+    {role !== 'Head Office Admin' && <label>{role === 'Technician' ? 'Home Branch' : 'Assigned Branch'}<select value={branchId} onChange={event => setBranchId(event.target.value)} required><option value="">Select a branch</option>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>}
+    {role !== 'Technician' && <label>Setup Code<input value={setupCode} onChange={event => setSetupCode(event.target.value)} autoComplete="off" required /></label>}
+    {(error || serverError) && <p className="notice" role="alert">{error || serverError}</p>}
     <button className="primary wide" type="submit">Create Account</button>
-    {error && <p className="notice" role="alert">{error}</p>}
-  </form><button className="linkBtn wide" onClick={onBack}>Back to login</button><div className="authHint">Registration is UI-only. Real verification will be handled by the backend.</div></div></div>;
+  </form><button className="linkBtn wide" onClick={onBack}>Back to login</button></div></div>;
 }

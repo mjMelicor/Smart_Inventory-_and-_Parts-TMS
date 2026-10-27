@@ -1,6 +1,6 @@
 # Smart Inventory and Parts Transfer Management System
 
-Complete React/Vite UI prototype for the proposed multi-branch automotive repair inventory system.
+React/Vite frontend for the multi-branch automotive repair inventory system.
 
 ## Included roles
 - Technician
@@ -9,14 +9,14 @@ Complete React/Vite UI prototype for the proposed multi-branch automotive repair
 
 ## Included requirements
 ### Technician
-- Login and role-based prototype access
+- API-backed login and role-based access
 - Sign-up with home branch
 - Dashboard
 - Repair jobs
 - Repair job details and billing
 - Parts search across all branches
 - Stock and bin visibility
-- Record parts used with inventory deduction simulation
+- Record parts used through the API with transactional inventory deduction
 - Transfer requests
 - Transfer status tracking
 
@@ -38,32 +38,28 @@ Complete React/Vite UI prototype for the proposed multi-branch automotive repair
 - Suppliers
 - Parts catalog and pricing
 - Transfer history
+- Date- and branch-filtered sales reports
 - Stock audit/history
 - System settings
 
-## Prototype behaviors
-- Stock deduction is simulated when parts are recorded against a repair job.
-- Transfer requests reserve source stock for availability checks.
-- Over-booking is blocked when requested quantity exceeds available stock.
-- Transfer lifecycle can be demonstrated: Pending Approval -> Approved/Rejected -> Dispatched -> Received.
-- Receiving a dispatched transfer adds the received quantity to the destination branch.
-- Audit entries are added for usage and transfer events.
-
 ## Technology scope
-This package is the **frontend/UI prototype only**. It does not yet connect to PostgreSQL/Supabase/Neon, Express, Prisma, real authentication, SQL procedures/triggers, or GitHub. Those are backend/deployment requirements for the implementation phase.
+This frontend connects to the Express API. Inventory and transfer rules are validated by the backend and PostgreSQL, not simulated in browser state. See `../../backend/README.md` for database and API setup.
 
 ## Run
-1. Install Node.js LTS.
-2. Extract the ZIP.
-3. Open a terminal in this folder.
-4. Run:
+1. Install Node.js 20.19 or later.
+2. Configure and start the API as described in `../../backend/README.md`.
+3. Copy `.env.example` to `.env` in this folder and set `VITE_API_URL` if the API is not at the local default.
+4. In a terminal in this folder, install the locked dependencies and start the development server:
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
 5. Open the local Vite URL shown in the terminal.
 
-## Demo
-On the login screen, choose a role from the Demo Role selector. The prototype uses mock data and does not require a real account.
+Sign in with an account registered in the connected database. There are no demo credentials. The first Head Office admin is created by the backend seed command; manager and additional admin signups require one-time setup codes issued by an administrator.
+
+Pending receipt, work-order, and parts-usage attempts are kept in browser `localStorage` so a retry after a page reload can reuse the original idempotency key and request details. Do not clear the pending attempt until you have confirmed its result. Because the saved details can include customer or vehicle information and browser storage is readable by page scripts, use a trusted, access-controlled device and protect the app against cross-site scripting.
+
+For deployment, run `npm ci` followed by `npm run build` and publish the generated `dist` folder using the selected static hosting service. Set `VITE_API_URL` at build time to the HTTPS backend URL.

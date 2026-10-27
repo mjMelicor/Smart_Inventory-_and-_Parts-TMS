@@ -73,4 +73,4 @@ smart-inventory-parts-transfer-system/
 
 ## Project Status
 
-Under development.
+The React/Vite frontend now uses the Express/Prisma API for authentication and the main inventory, repair, transfer, reporting, and administration workflows. PostgreSQL is still required: configure the database and environment variables using [`backend/README.md`](./backend/README.md), and configure the frontend API URL using [`frontend/smart_inventory_ui/.env.example`](./frontend/smart_inventory_ui/.env.example). A live database and deployed environment have not been provisioned by this repository.

@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { api } from './api';
+import { mapAuditEntry } from './audit';
 
 const InventoryContext = createContext(null);
 
@@ -68,6 +69,7 @@ function mapTransfer(transfer, branchById) {
 }
 
 export function InventoryProvider({ children, account }) {
+  const [branchIsActive, setBranchIsActive] = useState(account.branchIsActive !== false);
   const [branches, setBranches] = useState([]);
   const [branchAdminRows, setBranchAdminRows] = useState([]);
   const [parts, setParts] = useState([]);
@@ -89,19 +91,27 @@ export function InventoryProvider({ children, account }) {
     setApiReady(false);
     await api('/health');
     const role = account.role;
+    const session = await api('/auth/me');
+    const freshBranchIsActive = session.user.branchIsActive === true;
+    setBranchIsActive(freshBranchIsActive);
+    const branchOperational = role === 'head_office_admin' || freshBranchIsActive;
     const [branchRows, partRows, workOrderRows, transferRows, inventoryRows, optional] = await Promise.all([
       api('/branches'),
       api('/parts'),
-      api('/work-orders'),
+      branchOperational ? api('/work-orders') : Promise.resolve([]),
       api('/transfers'),
-      api(`/inventory${role === 'head_office_admin' ? '' : `?branchId=${encodeURIComponent(account.branchId)}`}`),
+      role === 'head_office_admin'
+        ? api('/inventory')
+        : role === 'technician' || branchOperational
+          ? api(`/inventory?branchId=${encodeURIComponent(account.branchId)}`)
+          : Promise.resolve([]),
       Promise.all([
         role === 'head_office_admin' ? api('/users') : Promise.resolve([]),
         role === 'head_office_admin' ? api('/suppliers') : Promise.resolve([]),
         role === 'head_office_admin' ? api('/branches/admin') : Promise.resolve([]),
-        role !== 'technician' ? api('/audit-logs') : Promise.resolve([]),
-        role !== 'technician' ? api('/reports/daily-sales') : Promise.resolve(null),
-        role !== 'technician' ? api('/technicians') : Promise.resolve([])
+        role !== 'technician' && branchOperational ? api('/audit-logs') : Promise.resolve([]),
+        role !== 'technician' && branchOperational ? api('/reports/daily-sales') : Promise.resolve(null),
+        role !== 'technician' && branchOperational ? api('/technicians') : Promise.resolve([])
       ])
     ]);
     const branchById = new Map(branchRows.map(branch => [String(branch.id), branch]));
@@ -126,9 +136,9 @@ export function InventoryProvider({ children, account }) {
         category: part.category || '',
         unitOfMeasure: part.unitOfMeasure,
         supplier: part.supplier.name,
-        supplierId: String(part.supplier.id),
         price: Number(part.retailPrice),
-        cost: Number(part.wholesaleCost),
+        ...(part.supplier.id == null ? {} : { supplierId: String(part.supplier.id) }),
+        ...(part.wholesaleCost == null ? {} : { cost: Number(part.wholesaleCost) }),
         stock,
         reorderLevels,
         bin: bins,
@@ -193,19 +203,11 @@ export function InventoryProvider({ children, account }) {
       userCount: branch._count?.users || 0,
       inventoryCount: branch._count?.inventory || 0
     })));
-    setAudit(optional[3].map(row => {
-      const details = row.details?.details || row.details || {};
-      return {
-        ...row,
-        action: details.action || `${row.tableName}_${row.operation}`,
-        part: details.partName || parts.find(p => p.id === String(details.partId))?.name || details.partId || '',
-        qty: details.quantity ?? details.quantityChange ?? '',
-        from: row.branch || '',
-        to: '',
-        user: row.user || 'System',
-        time: row.timestamp
-      };
-    }));
+    setAudit(optional[3].map(row => mapAuditEntry(row, {
+      parts: partData,
+      branches: branchRows,
+      transfers: transferRows
+    })));
     setDailySales(optional[4]);
     setApiReady(true);
   }, [account]);
@@ -458,7 +460,8 @@ export function InventoryProvider({ children, account }) {
     account: {
       ...account,
       name: `${account.firstName} ${account.lastName}`,
-      branch: branches.find(branch => branch.dbId === String(account.branchId))?.id || null,
+      branchIsActive,
+      branch: branches.find(branch => branch.dbId === String(account.branchId))?.id || String(account.branchId || '') || null,
       branchName: account.branch || null
     },
     branches,
@@ -499,7 +502,7 @@ export function InventoryProvider({ children, account }) {
     createWorkOrder,
     updateWorkOrder,
     updateWorkOrderStatus
-  }), [account, branches, branchAdminRows, parts, jobs, users, technicians, suppliers, transfers, audit, dailySales, loading, apiReady, refreshWarning, error, refresh, loadDailySales]);
+  }), [account, branchIsActive, branches, branchAdminRows, parts, jobs, users, technicians, suppliers, transfers, audit, dailySales, loading, apiReady, refreshWarning, error, refresh, loadDailySales]);
 
   return <InventoryContext.Provider value={value}>{children}</InventoryContext.Provider>;
 }

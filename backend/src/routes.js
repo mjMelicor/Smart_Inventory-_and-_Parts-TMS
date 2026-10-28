@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
-import { allowRoles, authenticate, requireBranch } from './auth.js';
+import { allowRoles, authenticate, requireActiveAssignedBranch, requireBranch } from './auth.js';
 import { businessDateRange, dateInTimeZone } from './businessDate.js';
 import { prisma } from './db.js';
 import { dailySalesTotals, moneyCents } from './money.js';
@@ -70,21 +70,54 @@ const publicUser = user => ({
   role: user.role,
   branchId: user.branchId == null ? null : String(user.branchId),
   branch: user.branch?.name ?? null,
+  branchIsActive: user.branch?.isActive ?? false,
   isActive: user.isActive
 });
 const publicUserSelect = {
   id: true,
   firstName: true,
   lastName: true,
-  email: true,
   role: true,
   branchId: true,
   isActive: true
 };
 const stockAccess = (user, branchId) => requireBranch({ user }, branchId);
 const setRoleScope = (user, query, field = 'branchId') => {
-  if (user.role !== 'head_office_admin') query[field] = user.branchId;
+  if (user.role !== 'head_office_admin') {
+    requireActiveAssignedBranch(user);
+    query[field] = user.branchId;
+  }
   return query;
+};
+const partResponseSelect = role => ({
+  id: true,
+  partNumber: true,
+  name: true,
+  description: true,
+  category: true,
+  unitOfMeasure: true,
+  retailPrice: true,
+  supplier: { select: { companyName: true } },
+  ...(role === 'technician' ? {} : { wholesaleCost: true })
+});
+const workOrderInclude = role => ({
+  branch: true,
+  assignedTechnician: { select: publicUserSelect },
+  items: {
+    include: { part: { select: partResponseSelect(role) } },
+    orderBy: { addedAt: 'asc' }
+  }
+});
+const ensureTransferBranchesActive = async (tx, transfer) => {
+  const [source, destination] = await Promise.all([
+    tx.branch.findUnique({ where: { id: transfer.sourceBranchId }, select: { isActive: true } }),
+    tx.branch.findUnique({ where: { id: transfer.destinationBranchId }, select: { isActive: true } })
+  ]);
+  if (!source?.isActive || !destination?.isActive) {
+    const error = new Error('Transfer operations require both branches to be active.');
+    error.status = 409;
+    throw error;
+  }
 };
 
 const loginSchema = z.object({
@@ -218,7 +251,7 @@ router.post('/auth/change-password', wrap(async (req, res) => {
 router.get('/inventory', wrap(async (req, res) => {
   const branchId = req.query.branchId ? idValue(req.query.branchId) : req.user.branchId;
   if (!branchId && req.user.role !== 'head_office_admin') return res.status(400).json({ error: 'A branch is required.' });
-  if (branchId) stockAccess(req.user, branchId);
+  if (branchId && req.user.role !== 'technician') stockAccess(req.user, branchId);
   const where = branchId ? { branchId } : {};
   if (req.query.lowStock === 'true') where.reorderLevel = { gt: 0 };
   const rows = await prisma.inventory.findMany({
@@ -235,7 +268,7 @@ router.get('/inventory', wrap(async (req, res) => {
     partName: row.part.name,
     category: row.part.category,
     supplier: row.part.supplier.companyName,
-    wholesaleCost: Number(row.part.wholesaleCost),
+    ...(req.user.role === 'technician' ? {} : { wholesaleCost: Number(row.part.wholesaleCost) }),
     retailPrice: Number(row.part.retailPrice),
     quantityOnHand: row.quantityOnHand,
     quantityReserved: row.quantityReserved,
@@ -293,9 +326,12 @@ router.get('/parts', wrap(async (req, res) => {
     description: part.description,
     category: part.category,
     unitOfMeasure: part.unitOfMeasure,
-    wholesaleCost: Number(part.wholesaleCost),
+    ...(req.user.role === 'technician' ? {} : { wholesaleCost: Number(part.wholesaleCost) }),
     retailPrice: Number(part.retailPrice),
-    supplier: { id: String(part.supplier.id), name: part.supplier.companyName },
+    supplier: {
+      ...(req.user.role === 'head_office_admin' ? { id: String(part.supplier.id) } : {}),
+      name: part.supplier.companyName
+    },
     inventory: part.inventory.map(stock => ({
         branchId: String(stock.branchId),
         branchName: stock.branch.name,
@@ -308,13 +344,8 @@ router.get('/parts', wrap(async (req, res) => {
   })));
 }));
 
-const workOrderInclude = {
-  branch: true,
-  assignedTechnician: { select: publicUserSelect },
-  items: { include: { part: true }, orderBy: { addedAt: 'asc' } }
-};
 const workOrderVisible = async (user, id) => {
-  const workOrder = await prisma.workOrder.findUnique({ where: { id }, include: workOrderInclude });
+  const workOrder = await prisma.workOrder.findUnique({ where: { id }, include: workOrderInclude(user.role) });
   if (!workOrder) return null;
   requireBranch({ user }, workOrder.branchId);
   if (user.role === 'technician' && workOrder.assignedTechnicianId !== user.id) {
@@ -329,7 +360,7 @@ router.get('/work-orders', wrap(async (req, res) => {
   const where = setRoleScope(req.user, {});
   if (req.user.role === 'technician') where.assignedTechnicianId = req.user.id;
   if (req.query.status) where.status = String(req.query.status);
-  const rows = await prisma.workOrder.findMany({ where, include: workOrderInclude, orderBy: { createdAt: 'desc' } });
+  const rows = await prisma.workOrder.findMany({ where, include: workOrderInclude(req.user.role), orderBy: { createdAt: 'desc' } });
   res.json(rows);
 }));
 
@@ -362,7 +393,7 @@ router.post('/work-orders', allowRoles('branch_manager', 'head_office_admin'), w
       || details.action !== 'WORK_ORDER_CREATED' || details.requestFingerprint !== requestFingerprint) {
       throw receiptConflict('IDEMPOTENCY_KEY_REUSED', 'This request key was already used with different work-order details. Review the earlier request before starting over.');
     }
-    const existing = await client.workOrder.findUnique({ where: { id: event.recordId }, include: workOrderInclude });
+    const existing = await client.workOrder.findUnique({ where: { id: event.recordId }, include: workOrderInclude(req.user.role) });
     if (!existing) throw receiptConflict('IDEMPOTENCY_EVENT_MISSING', 'The earlier work order could not be loaded. Contact an administrator before retrying.');
     return existing;
   };
@@ -399,7 +430,7 @@ router.post('/work-orders', allowRoles('branch_manager', 'head_office_admin'), w
           laborFee: input.laborFee,
           totalAmount: input.laborFee
         },
-        include: workOrderInclude
+        include: workOrderInclude(req.user.role)
       });
       await tx.auditLog.create({
         data: {
@@ -442,7 +473,7 @@ router.patch('/work-orders/:id', allowRoles('branch_manager', 'head_office_admin
   const id = idValue(req.params.id);
   try {
     const workOrder = await prisma.$transaction(async tx => {
-      const current = await tx.workOrder.findUnique({ where: { id }, include: workOrderInclude });
+      const current = await tx.workOrder.findUnique({ where: { id }, include: workOrderInclude(req.user.role) });
       if (!current) {
         const error = new Error('Work order not found.');
         error.status = 404;
@@ -473,7 +504,7 @@ router.patch('/work-orders/:id', allowRoles('branch_manager', 'head_office_admin
         }
         data.totalAmount = totalCents / 100;
       }
-      const updated = await tx.workOrder.update({ where: { id }, data, include: workOrderInclude });
+      const updated = await tx.workOrder.update({ where: { id }, data, include: workOrderInclude(req.user.role) });
       const auditChanges = Object.fromEntries(Object.entries(input).map(([field, value]) => [field, typeof value === 'bigint' ? String(value) : value]));
       const previousValues = Object.fromEntries(Object.keys(input).map(field => [
         field,
@@ -640,7 +671,7 @@ router.patch('/work-orders/:id/status', allowRoles('technician', 'branch_manager
   const id = idValue(req.params.id);
   try {
     const updated = await prisma.$transaction(async tx => {
-      const current = await tx.workOrder.findUnique({ where: { id }, include: workOrderInclude });
+      const current = await tx.workOrder.findUnique({ where: { id }, include: workOrderInclude(req.user.role) });
       if (!current) {
         const error = new Error('Work order not found.');
         error.status = 404;
@@ -665,7 +696,7 @@ router.patch('/work-orders/:id/status', allowRoles('technician', 'branch_manager
       const changed = await tx.workOrder.update({
         where: { id },
         data: { status, completedAt: status === 'completed' ? new Date() : null },
-        include: workOrderInclude
+        include: workOrderInclude(req.user.role)
       });
       await tx.auditLog.create({
         data: {
@@ -725,6 +756,7 @@ router.patch('/users/:id/password', allowRoles('head_office_admin'), wrap(async 
 }));
 
 router.get('/transfers', wrap(async (req, res) => {
+  const transferPartSelect = partResponseSelect(req.user.role);
   const where = req.user.role === 'head_office_admin' ? {} : req.user.role === 'technician'
     ? { requestedByUserId: req.user.id }
     : { OR: [{ sourceBranchId: req.user.branchId }, { destinationBranchId: req.user.branchId }] };
@@ -736,7 +768,7 @@ router.get('/transfers', wrap(async (req, res) => {
       destinationBranch: true,
       requestedBy: { select: publicUserSelect },
       approvedBy: { select: publicUserSelect },
-      items: { include: { part: true } }
+      items: { include: { part: { select: transferPartSelect } } }
     },
     orderBy: { createdAt: 'desc' }
   });
@@ -777,11 +809,9 @@ router.post('/transfers', allowRoles('technician'), wrap(async (req, res) => {
   try {
     const transfer = await prisma.$transaction(async tx => {
       await lockIdempotencyKey(tx, idempotencyKey);
-      const existing = await replayFromEvent(tx);
-      if (existing) return existing;
       const [source, destination, part] = await Promise.all([
-        tx.branch.findUnique({ where: { id: input.sourceBranchId } }),
-        tx.branch.findUnique({ where: { id: req.user.branchId } }),
+        tx.branch.findUnique({ where: { id: input.sourceBranchId }, select: { isActive: true } }),
+        tx.branch.findUnique({ where: { id: req.user.branchId }, select: { isActive: true } }),
         tx.part.findUnique({ where: { id: input.partId } })
       ]);
       if (!source?.isActive || !destination?.isActive) {
@@ -789,6 +819,8 @@ router.post('/transfers', allowRoles('technician'), wrap(async (req, res) => {
         error.status = 400;
         throw error;
       }
+      const existing = await replayFromEvent(tx);
+      if (existing) return existing;
       if (!part) {
         const error = new Error('Part not found.');
         error.status = 404;
@@ -841,6 +873,10 @@ router.post('/transfers', allowRoles('technician'), wrap(async (req, res) => {
     return res.status(201).json(transfer);
   } catch (error) {
     if (error?.code === 'P2002' || isSerializationConflict(error)) {
+      await ensureTransferBranchesActive(prisma, {
+        sourceBranchId: input.sourceBranchId,
+        destinationBranchId: req.user.branchId
+      });
       const existing = await replayFromEvent(prisma);
       if (existing) return res.status(201).json(existing);
       if (isSerializationConflict(error)) {
@@ -868,6 +904,7 @@ router.patch('/transfers/:id/decision', allowRoles('branch_manager'), wrap(async
         throw error;
       }
       requireBranch(req, current.sourceBranchId, 'You can only review transfers sent from your assigned branch.');
+      await ensureTransferBranchesActive(tx, current);
       if (current.status !== 'pending') {
         const error = new Error('Only pending transfer requests can be approved or rejected.');
         error.status = 409;
@@ -931,6 +968,7 @@ router.post('/transfers/:id/dispatch', allowRoles('branch_manager'), wrap(async 
         throw error;
       }
       requireBranch(req, current.sourceBranchId, 'You can only dispatch transfers from your assigned branch.');
+      await ensureTransferBranchesActive(tx, current);
       if (current.status !== 'approved' || current.items.length !== 1) {
         const error = new Error('Only approved transfers with one part item can be dispatched.');
         error.status = 409;
@@ -974,6 +1012,7 @@ router.post('/transfers/:id/receive', allowRoles('branch_manager'), wrap(async (
         throw error;
       }
       requireBranch(req, current.destinationBranchId, 'You can only receive transfers at your assigned branch.');
+      await ensureTransferBranchesActive(tx, current);
 
       const existingEvent = await tx.transferReceiptEvent.findUnique({
         where: { idempotencyKey },
@@ -1045,6 +1084,7 @@ router.post('/transfers/:id/receive', allowRoles('branch_manager'), wrap(async (
         const replay = await prisma.transferRequest.findUnique({ where: { id }, include: { items: true } });
         if (!replay) return res.status(404).json({ error: 'Transfer request not found.' });
         requireBranch(req, replay.destinationBranchId, 'You can only receive transfers at your assigned branch.');
+        await ensureTransferBranchesActive(prisma, replay);
         return res.json(replay);
       }
       if (isSerializationConflict(error)) {
@@ -1219,6 +1259,7 @@ router.get('/reports/low-stock', allowRoles('branch_manager', 'head_office_admin
 
 router.get('/audit-logs', allowRoles('branch_manager', 'head_office_admin'), wrap(async (req, res) => {
   const where = {};
+  requireActiveAssignedBranch(req.user);
   if (req.user.role !== 'head_office_admin' && !req.user.branchId) return res.status(403).json({ error: 'Your account must have an assigned branch to view audit logs.' });
   if (req.user.role !== 'head_office_admin') where.branchId = req.user.branchId;
   else if (req.query.branchId) where.branchId = idValue(req.query.branchId);

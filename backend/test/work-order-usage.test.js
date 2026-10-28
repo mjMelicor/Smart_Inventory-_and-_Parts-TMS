@@ -18,7 +18,7 @@ function partUsageRoute() {
   const [authorize, handler] = registered.route.stack.map(layer => layer.handle);
   return async ({ quantity, userId = 5n, branchId = 3n, workOrderId = 42n, partId = 1n }) => {
     const req = {
-      user: { id: userId, role: 'technician', branchId },
+      user: { id: userId, role: 'technician', branchId, branchIsActive: true },
       params: { id: String(workOrderId) },
       body: { quantity, partId: String(partId) },
       get: header => header === 'Idempotency-Key' ? '1dce7ccb-4e6f-4690-888b-65e5627f38de' : undefined

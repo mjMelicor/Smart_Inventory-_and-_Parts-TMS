@@ -21,7 +21,7 @@ export async function authenticate(req, res, next) {
         role: true,
         isActive: true,
         passwordHash: true,
-        branch: { select: { name: true } }
+        branch: { select: { name: true, isActive: true } }
       }
     });
     if (!user?.isActive) return res.status(401).json({ error: 'Account is inactive or no longer exists.' });
@@ -29,7 +29,7 @@ export async function authenticate(req, res, next) {
       return res.status(401).json({ error: 'Your session expired or was revoked. Please sign in again.' });
     }
     const { passwordHash: _passwordHash, ...safeUser } = user;
-    req.user = safeUser;
+    req.user = { ...safeUser, branchIsActive: user.branch?.isActive ?? false };
     next();
   } catch (error) {
     if (error instanceof jwt.JsonWebTokenError || error instanceof jwt.TokenExpiredError || error instanceof SyntaxError) {
@@ -49,8 +49,19 @@ export function allowRoles(...roles) {
 }
 
 export function requireBranch(req, branchId, message = 'You cannot access another branch.') {
-  if (req.user.role !== 'head_office_admin' && String(req.user.branchId) !== String(branchId)) {
+  if (req.user.role === 'head_office_admin') return;
+  if (String(req.user.branchId) !== String(branchId)) {
     const error = new Error(message);
+    error.status = 403;
+    throw error;
+  }
+  requireActiveAssignedBranch(req.user);
+}
+
+export function requireActiveAssignedBranch(user) {
+  if (user.role === 'head_office_admin') return;
+  if (!user.branchId || !user.branchIsActive) {
+    const error = new Error('Branch operations are unavailable because your assigned branch is inactive.');
     error.status = 403;
     throw error;
   }

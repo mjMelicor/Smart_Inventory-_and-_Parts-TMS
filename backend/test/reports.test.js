@@ -15,7 +15,7 @@ function responseDouble() {
 async function requestDailySales({ role, branchId, query = {} }) {
   const registered = router.stack.find(layer => layer.route?.path === '/reports/daily-sales' && layer.route.methods.get);
   assert.ok(registered, 'daily sales route is registered');
-  const req = { user: { id: 9n, role, branchId }, query };
+  const req = { user: { id: 9n, role, branchId, branchIsActive: true }, query };
   const res = responseDouble();
   let routeError;
   const [authorize, handler] = registered.route.stack.map(layer => layer.handle);
